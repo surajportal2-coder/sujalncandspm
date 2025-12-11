@@ -1,16 +1,14 @@
 from flask import Flask, render_template, request, jsonify
 from instagrapi import Client
-import threading
-import time
-import random
-import os
+import threading, time, random, os
 from datetime import datetime
 
 app = Flask(__name__)
-app.secret_key = "sujal_hawk_ajax_2025"
+app.secret_key = "sujal_hawk_final_2025"
 
+# Global state
 state = {"running": False, "sent": 0, "logs": [], "start_time": None}
-cfg = {"thread_id": "", "messages": [], "delay": 12, "cycle": 35, "break": 40, "threads": 3, "group_name": "", "sessionid": ""}
+cfg = {"sessionid": "", "thread_id": 0, "messages": [], "group_name": "", "delay": 12, "cycle": 35, "break_sec": 40, "threads": 3}
 
 clients = []
 
@@ -21,46 +19,54 @@ def log(msg):
         state["logs"] = state["logs"][-500:]
 
 def bomber(cl, tid, msgs):
-    local = 0
+    sent_in_cycle = 0
     while state["running"]:
         try:
             msg = random.choice(msgs)
             cl.direct_send(msg, thread_ids=[tid])
-            local += 1
+            sent_in_cycle += 1
             state["sent"] += 1
             log(f"Sent #{state['sent']} → {msg[:40]}")
 
-            if state["sent"] % cfg["cycle"] == 0 and cfg["group_name"]:
-                new_name = f"{cfg['group_name']} → {datetime.now().strftime('%I:%M:%S %p')}"
-                cl.direct_thread_update_title(tid, new_name)
-                log(f"Group name changed → {new_name}")
+            # Cycle complete → Name change + Break
+            if sent_in_cycle >= cfg["cycle"]:
+                if cfg["group_name"]:
+                    new_name = f"{cfg['group_name']} → {datetime.now().strftime('%I:%M:%S %p')}"
+                    try:
+                        cl.direct_thread_update_title(tid, new_name)
+                        log(f"GROUP NAME CHANGED → {new_name}")
+                    except:
+                        log("Name change failed (maybe rate limit)")
 
-            if local % cfg["cycle"] == 0:
-                time.sleep(cfg["break"])
+                log(f"BREAK {cfg['break_sec']} SECONDS AFTER {cfg['cycle']} MSGS")
+                time.sleep(cfg["break_sec"])
+                sent_in_cycle = 0  # Reset cycle counter
+
             time.sleep(cfg["delay"] + random.uniform(-2, 3))
-        except:
-            time.sleep(20)
+        except Exception as e:
+            log(f"Send failed → {str(e)[:50]}")
+            time.sleep(15)
 
-@app.route('/')
+@app.route("/")
 def index():
-    return render_template('index.html')
+    return render_template("index.html")
 
-@app.route('/start', methods=['POST'])
+@app.route("/start", methods=["POST"])
 def start():
-    global state
+    global state, cfg
     state["running"] = False
     time.sleep(1)
     state = {"running": True, "sent": 0, "logs": ["BOMBING STARTED"], "start_time": time.time()}
     clients.clear()
 
-    cfg["sessionid"] = request.form.get("sessionid", "").strip()
+    cfg["sessionid"] = request.form["sessionid"].strip()
     cfg["thread_id"] = int(request.form["thread_id"])
     cfg["messages"] = [m.strip() for m in request.form["messages"].split("\n") if m.strip()]
-    cfg["group_name"] = request.form.get("group_name", "")
-    cfg["delay"] = float(request.form.get("delay", 12))
-    cfg["cycle"] = int(request.form.get("cycle", 35))
-    cfg["break"] = int(request.form.get("break", 40))
-    cfg["threads"] = int(request.form.get("threads", 3))
+    cfg["group_name"] = request.form["group_name"].strip()
+    cfg["delay"] = float(request.form.get("delay", "12"))
+    cfg["cycle"] = int(request.form.get("cycle", "35"))
+    cfg["break_sec"] = int(request.form.get("break_sec", "40"))
+    cfg["threads"] = int(request.form.get("threads", "3"))
 
     for i in range(cfg["threads"]):
         try:
@@ -73,15 +79,15 @@ def start():
         except Exception as e:
             log(f"Thread {i+1} Failed → {str(e)[:60]}")
 
-    return jsonify({"status": "started"})
+    return jsonify({"ok": True})
 
-@app.route('/stop')
+@app.route("/stop")
 def stop():
     state["running"] = False
     log("STOPPED BY USER")
-    return jsonify({"status": "stopped"})
+    return jsonify({"ok": True})
 
-@app.route('/status')
+@app.route("/status")
 def status():
     uptime = "00:00:00"
     if state.get("start_time"):
